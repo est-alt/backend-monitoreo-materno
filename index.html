@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sistema de Monitoreo Materno-Fetal</title>
+  <link rel="icon" type="image/png" href="/static/icon-193.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=Lora:wght@500;600&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --primary: #D86A85;
+      --secondary: #E8829A;
+      --accent: #F3B0C3;
+      --gold: #FFB347;
+      --bg: #FFF9F6;
+      --card: #FFFFFF;
+      --text: #5A3A42;
+      --muted: #A37985;
+      --border: #FADEE4;
+      --danger: #E75A5A;
+      --success: #4D774E;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* Modal / Auth Screen */
+    .auth-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(90, 58, 66, 0.4); display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .auth-box {
+      background: white; padding: 35px; border-radius: 20px; width: 100%; max-width: 420px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 1px solid var(--border);
+      max-height: 90vh; overflow-y: auto;
+    }
+    .auth-box h2 { font-family: 'Lora', serif; color: var(--primary); margin-bottom: 8px; text-align: center; }
+    .auth-box p { font-size: 0.85rem; color: var(--muted); text-align: center; margin-bottom: 20px; }
+
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; font-size: 0.8rem; font-weight: 500; margin-bottom: 5px; color: var(--text); }
+    .form-group input, .form-group select {
+      width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit;
+    }
+    .btn {
+      width: 100%; padding: 12px; border: none; background: var(--primary); color: white;
+      font-weight: 600; border-radius: 10px; cursor: pointer; transition: 0.2s; margin-top: 10px;
+    }
+    .btn:hover { background: var(--secondary); }
+    .btn-secondary { background: var(--muted); }
+    .btn-secondary:hover { background: var(--text); }
+
+    /* Main Dashboard Layout */
+    header {
+      background: var(--primary); color: white; padding: 15px 30px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    header h1 { font-family: 'Lora', serif; font-size: 1.2rem; }
+    .user-tag { font-size: 0.8rem; background: rgba(255,255,255,0.2); padding: 5px 12px; border-radius: 15px; }
+
+    .dashboard { display: flex; min-height: calc(100vh - 55px); }
+    sidebar { width: 250px; background: white; border-right: 1px solid var(--border); padding: 20px; }
+    .nav-btn {
+      display: block; width: 100%; padding: 12px; text-align: left; background: none; border: none;
+      font-family: inherit; font-size: 0.9rem; color: var(--muted); cursor: pointer; border-radius: 8px; margin-bottom: 6px;
+    }
+    .nav-btn.active, .nav-btn:hover { background: var(--bg); color: var(--primary); font-weight: 600; }
+
+    main { flex: 1; padding: 30px; }
+    .hidden { display: none !important; }
+    .card { background: white; border-radius: 16px; padding: 20px; border: 1px solid var(--border); margin-bottom: 20px; }
+    
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    th { background: var(--bg); color: var(--primary); font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <!-- MODAL DE INICIO DE SESIÓN / REGISTRO -->
+  <div id="auth-overlay" class="auth-overlay">
+    <div class="auth-box">
+      <h2 id="auth-title">Acceso al Sistema</h2>
+      <p id="auth-subtitle">Inicia sesión o crea tu cuenta de administrador</p>
+
+      <!-- BOTONES DE PESTAÑAS PARA CAMBIAR ENTRE LOGIN Y REGISTRO -->
+      <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+        <button type="button" class="btn" style="margin-top:0;" id="tab-btn-login" onclick="switchAuthMode('login')">Iniciar Sesión</button>
+        <button type="button" class="btn btn-secondary" style="margin-top:0;" id="tab-btn-register" onclick="switchAuthMode('register')">Registrarse</button>
+      </div>
+
+      <!-- FORMULARIO DE LOGIN -->
+      <form id="form-login" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label>Usuario</label>
+          <input type="text" id="login-user" required>
+        </div>
+        <div class="form-group">
+          <label>Contraseña</label>
+          <input type="password" id="login-pass" required>
+        </div>
+        <button type="submit" class="btn">Ingresar al Sistema</button>
+      </form>
+
+      <!-- FORMULARIO DE REGISTRO (PRIMER ADMIN) -->
+      <form id="form-first-admin" class="hidden" onsubmit="handleRegisterAdmin(event)">
+        <div class="form-group"><label>Nombre</label><input type="text" id="adm-nombre" required></div>
+        <div class="form-group"><label>Primer Apellido</label><input type="text" id="adm-p-apellido" required></div>
+        <div class="form-group"><label>Segundo Apellido</label><input type="text" id="adm-s-apellido"></div>
+        <div class="form-group"><label>Carnet Identidad</label><input type="text" id="adm-ci" required></div>
+        <div class="form-group"><label>Celular</label><input type="text" id="adm-celular" required></div>
+        <div class="form-group"><label>Usuario</label><input type="text" id="adm-user" required></div>
+        <div class="form-group"><label>Contraseña</label><input type="password" id="adm-pass" required></div>
+        <button type="submit" class="btn">Crear Administrador Principal</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- PANELES DE NAVEGACIÓN -->
+  <header>
+    <h1>🌸 Monitor Materno-Fetal</h1>
+    <div class="user-tag" id="header-user-info">Cargando...</div>
+  </header>
+
+  <div class="dashboard">
+    <sidebar>
+      <button class="nav-btn" data-tab="tab-monitoreo" onclick="showTab('tab-monitoreo')">📊 Mis Pacientes / Monitoreo</button>
+      <button class="nav-btn" data-tab="tab-pacientes" onclick="showTab('tab-pacientes')">🩺 Registro de Pacientes</button>
+      <button class="nav-btn" data-tab="tab-datos" onclick="showTab('tab-datos')">📈 Datos y Estadísticas</button>
+      <button class="nav-btn" data-tab="tab-admin" onclick="showTab('tab-admin')">👑 Registrar Personal</button>
+      <button class="nav-btn" data-tab="tab-tecnico" onclick="showTab('tab-tecnico')">🛠️ Servicio Técnico</button>
+      <button class="nav-btn" style="color: var(--danger); margin-top: 30px;" onclick="logout()">Cerrar Sesión</button>
+    </sidebar>
+
+    <main>
+      <!-- TAB 1: MONITOREO -->
+      <section id="tab-monitoreo" class="hidden">
+        <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Mis Pacientes</h2>
+        <div class="card">
+          <div class="form-group" style="display:flex; gap:10px; align-items:end;">
+            <div style="flex:1"><label>Buscar por Carnet de Identidad</label><input type="text" id="buscar-ci"></div>
+            <button class="btn" style="width:auto; margin:0;" onclick="buscarPaciente()">Buscar</button>
+          </div>
+          <div id="resultado-paciente"></div>
+        </div>
+        <div class="card">
+          <h3>Pacientes registradas por mí</h3>
+          <table><thead><tr><th>ID</th><th>Nombre</th><th>Carnet</th><th>Trimestre</th><th>Semanas</th></tr></thead>
+          <tbody id="tbody-mis-pacientes"></tbody></table>
+        </div>
+      </section>
+
+      <!-- TAB 2: PACIENTES -->
+      <section id="tab-pacientes" class="hidden">
+        <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Registrar Nueva Embarazada</h2>
+        <div class="card" style="max-width: 500px;">
+          <form onsubmit="handleRegisterPaciente(event)">
+            <div class="form-group"><label>Nombre</label><input type="text" id="pac-nombre" required></div>
+            <div class="form-group"><label>Primer Apellido</label><input type="text" id="pac-apellido" required></div>
+            <div class="form-group"><label>Segundo Apellido</label><input type="text" id="pac-s-apellido"></div>
+            <div class="form-group"><label>Carnet Identidad</label><input type="text" id="pac-ci" required></div>
+            <div class="form-group"><label>Fecha Nacimiento</label><input type="date" id="pac-fnac" required></div>
+            <div class="form-group"><label>Celular</label><input type="text" id="pac-celular" required></div>
+            <div class="form-group">
+              <label>Trimestre Gestacional</label>
+              <select id="pac-trimestre"><option value="1">1er Trimestre</option><option value="2">2do Trimestre</option><option value="3">3er Trimestre</option></select>
+            </div>
+            <div class="form-group"><label>Semanas de Gestación</label><input type="number" id="pac-semanas" min="1" max="42" required></div>
+            <button type="submit" class="btn">Guardar en PostgreSQL</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 3: ADMIN -->
+      <section id="tab-admin" class="hidden">
+        <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Registrar Operador o Técnico</h2>
+        <div class="card" style="max-width: 500px;">
+          <form onsubmit="handleRegisterPersonal(event)">
+            <div class="form-group"><label>Nombre</label><input type="text" id="per-nombre" required></div>
+            <div class="form-group"><label>Primer Apellido</label><input type="text" id="per-apellido" required></div>
+            <div class="form-group"><label>Segundo Apellido</label><input type="text" id="per-s-apellido"></div>
+            <div class="form-group"><label>Carnet Identidad</label><input type="text" id="per-ci" required></div>
+            <div class="form-group"><label>Celular</label><input type="text" id="per-celular" required></div>
+            <div class="form-group">
+              <label>Rol Asignado</label>
+              <select id="per-rol">
+                <option value="Operador">Operador (Atención de Pacientes)</option>
+                <option value="Servicio Técnico">Servicio Técnico (Mantenimiento Hardware)</option>
+                <option value="Administrador">Administrador</option>
+              </select>
+            </div>
+            <div class="form-group"><label>Usuario</label><input type="text" id="per-user" required></div>
+            <div class="form-group"><label>Contraseña</label><input type="password" id="per-pass" required></div>
+            <button type="submit" class="btn">Registrar Usuario en Sistema</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- ADMIN: datos y estadísticas -->
+      <section id="tab-datos" class="hidden">
+        <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Datos y Estadísticas</h2>
+        <div class="card" id="stats-box">Cargando...</div>
+        <div class="card">
+          <h3>Todas las pacientes</h3>
+          <table><thead><tr><th>ID</th><th>Nombre</th><th>Carnet</th><th>Trimestre</th><th>Semanas</th><th>Operador (ID)</th></tr></thead>
+          <tbody id="tbody-todas-pacientes"></tbody></table>
+        </div>
+      </section>
+
+      <!-- TAB 4: SERVICIO TÉCNICO -->
+      <section id="tab-tecnico" class="hidden">
+        <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Calibración y Actuadores</h2>
+
+        <div class="card" style="max-width:500px;">
+          <h3>Calibrar con elemento patrón</h3>
+          <div class="form-group"><label>Sensor</label>
+            <select id="cal-sensor">
+              <option value="fc_materna">FC materna</option>
+              <option value="fc_fetal">FC fetal</option>
+              <option value="presion_sistolica">Presión sistólica</option>
+              <option value="presion_diastolica">Presión diastólica</option>
+            </select></div>
+          <div class="form-group"><label>Valor del patrón</label><input type="number" step="any" id="cal-patron"></div>
+          <div class="form-group"><label>Valor leído por el sensor</label><input type="number" step="any" id="cal-leido"></div>
+          <button class="btn" onclick="guardarCalibracion()">Guardar desfase (offset = patrón − leído)</button>
+        </div>
+
+        <div class="card">
+          <h3>Calibración vigente</h3>
+          <table><thead><tr><th>Sensor</th><th>Patrón</th><th>Leído</th><th>Offset</th><th>Fecha</th></tr></thead>
+          <tbody id="tbody-calibracion"></tbody></table>
+        </div>
+
+        <div class="card">
+          <h3>Prueba de sensores (en vivo)</h3>
+          <div id="prueba-box">Esperando lecturas...</div>
+        </div>
+
+        <div class="card">
+          <h3>Actuadores</h3>
+          <div id="actuadores-box"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const API_URL = window.location.origin;
+
+    function getTokenFromURL() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("token");
+    }
+
+    const TOKEN = getTokenFromURL();
+    let timerTec = null, timerPac = null;
+
+    const TABS_POR_ROL = {
+      "Administrador": ["tab-datos", "tab-admin"],
+      "Operador": ["tab-monitoreo", "tab-pacientes"],
+      "Servicio Técnico": ["tab-tecnico"]
+    };
+
+    function api(path, method = "GET", body) {
+      const sep = path.includes("?") ? "&" : "?";
+      return fetch(`${API_URL}${path}${sep}token=${TOKEN}`, {
+        method, headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+    }
+
+    function switchAuthMode(mode) {
+      const btnLogin = document.getElementById("tab-btn-login");
+      const btnRegister = document.getElementById("tab-btn-register");
+      const formLogin = document.getElementById("form-login");
+      const formRegister = document.getElementById("form-first-admin");
+      const title = document.getElementById("auth-title");
+      const subtitle = document.getElementById("auth-subtitle");
+
+      if (mode === "login") {
+        btnLogin.classList.remove("btn-secondary");
+        btnRegister.classList.add("btn-secondary");
+        formLogin.classList.remove("hidden");
+        formRegister.classList.add("hidden");
+        title.textContent = "Iniciar Sesión";
+        subtitle.textContent = "Ingresa tus credenciales para acceder al sistema";
+      } else {
+        btnRegister.classList.remove("btn-secondary");
+        btnLogin.classList.add("btn-secondary");
+        formRegister.classList.remove("hidden");
+        formLogin.classList.add("hidden");
+        title.textContent = "Registro Inicial";
+        subtitle.textContent = "Crea la cuenta de Administrador principal";
+      }
+    }
+
+    async function validateSession(token) {
+      try {
+        const res = await fetch(`${API_URL}/api/user-info?token=${token}`);
+        if (!res.ok) throw new Error();
+        const user = await res.json();
+        document.getElementById("auth-overlay").classList.add("hidden");
+        document.getElementById("header-user-info").textContent = `🔑 ${user.nombre} (${user.rol})`;
+
+        const tabs = TABS_POR_ROL[user.rol];
+        document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
+          b.classList.toggle("hidden", !tabs.includes(b.dataset.tab)));
+        showTab(tabs[0]);
+      } catch {
+        alert("Token inválido o expirado. Inicia sesión de nuevo.");
+        window.location.href = window.location.pathname;
+      }
+    }
+
+    function showTab(tabId) {
+      clearInterval(timerTec); clearInterval(timerPac);
+      document.querySelectorAll("main section").forEach(s => s.classList.add("hidden"));
+      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+      document.getElementById(tabId).classList.remove("hidden");
+      const btn = document.querySelector(`.nav-btn[data-tab="${tabId}"]`);
+      if (btn) btn.classList.add("active");
+
+      if (tabId === "tab-monitoreo") loadPacientes("tbody-mis-pacientes");
+      if (tabId === "tab-datos") loadDatosAdmin();
+      if (tabId === "tab-tecnico") {
+        cargarCalibracion(); cargarActuadores(); cargarPrueba();
+        timerTec = setInterval(cargarPrueba, 2000);
+      }
+    }
+
+    async function loadPacientes(tbodyId) {
+      const res = await api("/api/pacientes");
+      if (!res.ok) return;
+      const pacientes = await res.json();
+      const esAdmin = tbodyId === "tbody-todas-pacientes";
+      document.getElementById(tbodyId).innerHTML = pacientes.map(p =>
+        `<tr><td>${p.id_paciente}</td>
+        <td>${p.nombre} ${p.primer_apellido} ${p.segundo_apellido || ""}</td>
+        <td>${p.carnet_identidad}</td><td>${p.trimestre}°</td><td>${p.semanas_gestacion} sem</td>
+        ${esAdmin ? `<td>${p.id_operador_asignado}</td>` : ""}</tr>`).join("");
+    }
+
+    async function consultarPaciente(ci) {
+      const res = await api(`/api/paciente/buscar?ci=${encodeURIComponent(ci)}`);
+      const box = document.getElementById("resultado-paciente");
+      if (!res.ok) { box.innerHTML = "<p>No se encontró esa paciente entre tus pacientes.</p>"; clearInterval(timerPac); return; }
+      const { paciente: p, ultima: u, historial } = await res.json();
+      box.innerHTML = `
+        <h3 style="margin-top:15px">${p.nombre} ${p.primer_apellido} ${p.segundo_apellido || ""} — CI ${p.carnet_identidad}</h3>
+        <p>${p.semanas_gestacion} semanas (${p.trimestre}° trimestre)</p>
+        <p><b>Datos actuales:</b> ${u
+          ? `FC materna ${u.frecuencia_cardiaca_materna} | FC fetal ${u.frecuencia_cardiaca_fetal} | PA ${u.presion_sistolica}/${u.presion_diastolica} <small>(${new Date(u.fecha_hora).toLocaleString()})</small>`
+          : "sin lecturas"}</p>
+        <table><thead><tr><th>Fecha</th><th>FC mat.</th><th>FC fetal</th><th>PA</th></tr></thead><tbody>
+        ${historial.map(l => `<tr><td>${new Date(l.fecha_hora).toLocaleString()}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td><td>${l.presion_sistolica}/${l.presion_diastolica}</td></tr>`).join("")}
+        </tbody></table>`;
+    }
+
+    function buscarPaciente() {
+      const ci = document.getElementById("buscar-ci").value.trim();
+      if (!ci) return;
+      clearInterval(timerPac);
+      consultarPaciente(ci);
+      timerPac = setInterval(() => consultarPaciente(ci), 3000);
+    }
+
+    async function loadDatosAdmin() {
+      loadPacientes("tbody-todas-pacientes");
+      const res = await api("/api/estadisticas");
+      if (!res.ok) return;
+      const { resumen: r, por_trimestre } = await res.json();
+      document.getElementById("stats-box").innerHTML = `
+        <p>Lecturas totales: <b>${r.total_lecturas}</b> | Pacientes con lecturas: <b>${r.pacientes_con_lecturas}</b></p>
+        <p>Promedios → FC materna: ${r.fc_materna_prom ?? "-"} | FC fetal: ${r.fc_fetal_prom ?? "-"} | PA: ${r.sistolica_prom ?? "-"}/${r.diastolica_prom ?? "-"}</p>
+        <p>Por trimestre: ${por_trimestre.map(t => `${t.trimestre}°: ${t.cantidad}`).join(" | ")}</p>`;
+    }
+
+    async function guardarCalibracion() {
+      const body = {
+        sensor: document.getElementById("cal-sensor").value,
+        valor_patron: parseFloat(document.getElementById("cal-patron").value),
+        valor_leido: parseFloat(document.getElementById("cal-leido").value)
+      };
+      const res = await api("/api/calibracion", "POST", body);
+      if (res.ok) { const d = await res.json(); alert(`Offset guardado: ${d.offset}`); cargarCalibracion(); }
+      else alert("Error guardando calibración.");
+    }
+
+    async function cargarCalibracion() {
+      const res = await api("/api/calibracion");
+      if (!res.ok) return;
+      const rows = await res.json();
+      document.getElementById("tbody-calibracion").innerHTML = rows.map(c =>
+        `<tr><td>${c.sensor}</td><td>${c.valor_patron}</td><td>${c.valor_leido}</td><td>${c.offset_lineal}</td><td>${new Date(c.fecha).toLocaleString()}</td></tr>`).join("");
+    }
+
+    async function cargarPrueba() {
+      const res = await api("/api/sensores/prueba");
+      if (!res.ok) return;
+      const { cruda: c, corregida: k } = await res.json();
+      document.getElementById("prueba-box").innerHTML = c ? `
+        <table><thead><tr><th></th><th>FC materna</th><th>FC fetal</th><th>Sistólica</th><th>Diastólica</th></tr></thead><tbody>
+        <tr><td>Cruda</td><td>${c.frecuencia_cardiaca_materna}</td><td>${c.frecuencia_cardiaca_fetal}</td><td>${c.presion_sistolica}</td><td>${c.presion_diastolica}</td></tr>
+        <tr><td>Corregida</td><td>${k.frecuencia_cardiaca_materna}</td><td>${k.frecuencia_cardiaca_fetal}</td><td>${k.presion_sistolica}</td><td>${k.presion_diastolica}</td></tr>
+        </tbody></table>` : "Sin lecturas.";
+    }
+
+    async function cargarActuadores() {
+      const res = await api("/api/actuadores");
+      if (!res.ok) return;
+      const acts = await res.json();
+      document.getElementById("actuadores-box").innerHTML = acts.map(a => `
+        <div style="margin-bottom:12px">
+          <b>${a.nombre_sensor_actuador}</b> — ${a.estado ? "🟢 ENCENDIDO" : "⚪ APAGADO"}<br>
+          <button class="btn" style="width:auto;display:inline-block" onclick="setActuador(${a.id_actuador}, true)">Encender</button>
+          <button class="btn" style="width:auto;display:inline-block;background:var(--muted)" onclick="setActuador(${a.id_actuador}, false)">Apagar</button>
+        </div>`).join("");
+    }
+
+    async function setActuador(id, estado) {
+      const res = await api(`/api/actuadores/${id}?estado=${estado}`, "POST");
+      if (res.ok) cargarActuadores(); else alert("Error cambiando actuador.");
+    }
+
+    window.onload = async () => {
+      const token = getTokenFromURL();
+      if (!token) {
+        document.getElementById("auth-overlay").classList.remove("hidden");
+        try {
+          const res = await fetch(`${API_URL}/api/check-admin`);
+          const data = await res.json();
+          if (!data.has_admin) {
+            switchAuthMode('register');
+          }
+        } catch (e) {
+          console.error("Error verificando admin:", e);
+        }
+      } else {
+        validateSession(token);
+      }
+    };
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const user = document.getElementById("login-user").value;
+      const pass = document.getElementById("login-pass").value;
+
+      const res = await fetch(`${API_URL}/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ usuario: user, contrasena: pass })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        window.location.href = `${window.location.pathname}?token=${data.token}`;
+      } else {
+        alert("Usuario o contraseña incorrectos");
+      }
+    }
+
+    async function handleRegisterAdmin(e) {
+      e.preventDefault();
+      const payload = {
+        nombre: document.getElementById("adm-nombre").value,
+        primer_apellido: document.getElementById("adm-p-apellido").value,
+        segundo_apellido: document.getElementById("adm-s-apellido").value,
+        carnet_identidad: document.getElementById("adm-ci").value,
+        celular: document.getElementById("adm-celular").value,
+        usuario: document.getElementById("adm-user").value,
+        contrasena: document.getElementById("adm-pass").value,
+        rol: "Administrador"
+      };
+
+      const res = await fetch(`${API_URL}/api/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        alert("Administrador creado con éxito. Inicia sesión.");
+        window.location.reload();
+      } else {
+        alert("Error registrando Administrador.");
+      }
+    }
+
+    async function handleRegisterPersonal(e) {
+      e.preventDefault();
+      const token = getTokenFromURL();
+      const payload = {
+        nombre: document.getElementById("per-nombre").value,
+        primer_apellido: document.getElementById("per-apellido").value,
+        segundo_apellido: document.getElementById("per-s-apellido").value,  
+        carnet_identidad: document.getElementById("per-ci").value,
+        celular: document.getElementById("per-celular").value,
+        rol: document.getElementById("per-rol").value,
+        usuario: document.getElementById("per-user").value,
+        contrasena: document.getElementById("per-pass").value
+      };
+
+      const res = await fetch(`${API_URL}/api/register?token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        alert("Usuario registrado en PostgreSQL correctamente.");
+        e.target.reset();
+      } else {
+        alert("Error de autorización o usuario duplicado.");
+      }
+    }
+
+    async function handleRegisterPaciente(e) {
+      e.preventDefault();
+      const token = getTokenFromURL();
+      const payload = {
+        nombre: document.getElementById("pac-nombre").value,
+        primer_apellido: document.getElementById("pac-apellido").value,
+        segundo_apellido: document.getElementById("pac-s-apellido").value,
+        carnet_identidad: document.getElementById("pac-ci").value,
+        fecha_nacimiento: document.getElementById("pac-fnac").value,
+        celular: document.getElementById("pac-celular").value,
+        trimestre: parseInt(document.getElementById("pac-trimestre").value),
+        semanas_gestacion: parseInt(document.getElementById("pac-semanas").value)
+      };
+
+      const res = await fetch(`${API_URL}/api/paciente?token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        alert("Paciente registrada en la Base de Datos.");
+        e.target.reset();
+        loadPacientes("tbody-mis-pacientes");
+      } else {
+        alert("Error registrando paciente.");
+      }
+    }
+
+    function logout() {
+      window.location.href = window.location.pathname;
+    }
+  </script>
+</body>
+</html>
