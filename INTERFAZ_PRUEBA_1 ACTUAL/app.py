@@ -443,6 +443,35 @@ def lecturas_sesion(id_sesion: int, token: str = Query(...)):
     cur.close(); conn.close()
     return [corregir(l, off) for l in lect]
 
+class DatosESP32(BaseModel):
+    id_sesion: int
+    frecuencia_cardiaca_materna: float
+    frecuencia_cardiaca_fetal: float
+    presion_sistolica: float
+    presion_diastolica: float
+
+@app.post("/api/esp32/datos")
+def recibir_datos_esp32(data: DatosESP32):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Guardar automáticamente la lectura enviada por el ESP32 en la base de datos
+        cur.execute("""
+            INSERT INTO lecturas_monitoreo 
+            (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal, presion_sistolica, presion_diastolica)
+            SELECT %s, id_paciente, %s, %s, %s, %s 
+            FROM sesion_monitoreo WHERE id_sesion = %s;
+        """, (data.id_sesion, data.frecuencia_cardiaca_materna, data.frecuencia_cardiaca_fetal, 
+              data.presion_sistolica, data.presion_diastolica, data.id_sesion))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Error guardando datos del ESP32: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+    return {"status": "ok", "message": "Datos de sensores sincronizados correctamente."}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
