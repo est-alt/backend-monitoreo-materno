@@ -70,8 +70,12 @@ def auth(cur, token, roles):
     return u
 
 def get_offsets(cur):
-    cur.execute("SELECT DISTINCT ON (sensor) sensor, offset_lineal FROM calibracion_sensor ORDER BY sensor, fecha DESC;")
-    return {r['sensor']: float(r['offset_lineal']) for r in cur.fetchall()}
+    try:
+        cur.execute("SELECT DISTINCT ON (sensor) sensor, offset_lineal FROM calibracion_sensor ORDER BY sensor, fecha DESC;")
+        return {r['sensor']: float(r['offset_lineal']) for r in cur.fetchall()}
+    except Exception:
+        cur.connection.rollback()
+        return {}
 
 def corregir(lectura, offsets):
     if not lectura:
@@ -246,7 +250,7 @@ def listar_pacientes(token: str = Query(...)):
 def buscar_paciente(ci: str, token: str = Query(...)):
     conn = get_db_connection(); cur = conn.cursor()
     u = auth(cur, token, ['Administrador', 'Operador'])
-    q, params = "SELECT * FROM paciente WHERE carnet_identidad = %s", [ci]
+    q, params = "SELECT * FROM paciente WHERE TRIM(carnet_identidad) = %s", [ci.strip()]
     if u['rol'] == 'Operador':
         q += " AND id_operador_asignado = %s"; params.append(u['id_usuario'])
     cur.execute(q, params)
