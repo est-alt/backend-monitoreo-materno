@@ -242,6 +242,47 @@
           <div id="actuadores-box"></div>
         </div>
       </section>
+      <!-- VISTA: MONITOREO EN VIVO -->
+      <section id="view-monitoreo" class="hidden">
+        <button class="btn btn-secondary" style="width:auto;margin:0 0 15px" onclick="volverBusqueda()">← Volver</button>
+        <h2 id="mon-titulo" style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;"></h2>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:15px; margin-bottom:20px;">
+          <div class="card" style="text-align:center"><p>Presión sistólica (mmHg)</p><h1 id="mon-sis">—</h1></div>
+          <div class="card" style="text-align:center"><p>Presión diastólica (mmHg)</p><h1 id="mon-dia">—</h1></div>
+          <div class="card" style="text-align:center"><p>FC materna (lpm)</p><h1 id="mon-fcm">—</h1></div>
+          <div class="card" style="text-align:center"><p>FC fetal (lpm)</p><h1 id="mon-fcf">—</h1></div>
+        </div>
+        <div class="card">
+          <h3>Últimas lecturas</h3>
+          <table><thead><tr><th>Hora</th><th>Sistólica</th><th>Diastólica</th><th>FC mat.</th><th>FC fetal</th></tr></thead>
+          <tbody id="mon-tbody"></tbody></table>
+        </div>
+        <button class="btn" style="width:auto;background:var(--danger)" onclick="finalizarMonitoreo()">Finalizar monitoreo</button>
+      </section>
+
+      <!-- VISTA: VISUALIZAR SESIONES -->
+      <section id="view-visualizar" class="hidden">
+        <button class="btn btn-secondary" style="width:auto;margin:0 0 15px" onclick="volverBusqueda()">← Volver</button>
+        <h2 id="vis-titulo" style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;"></h2>
+        <div class="card">
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
+            <div><label>Desde</label><input type="date" id="vis-desde"></div>
+            <div><label>Hasta</label><input type="date" id="vis-hasta"></div>
+            <button class="btn" style="width:auto;margin:0" onclick="cargarSesiones()">Filtrar</button>
+            <button class="btn btn-secondary" style="width:auto;margin:0" onclick="limpiarFiltro()">Limpiar</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Sesiones</h3>
+          <table><thead><tr><th>Inicio</th><th>Fin</th><th>Lecturas</th><th>Sist. prom.</th><th>Diast. prom.</th><th>FC mat. prom.</th><th>FC fetal prom.</th><th></th></tr></thead>
+          <tbody id="vis-tbody"></tbody></table>
+        </div>
+        <div class="card hidden" id="vis-detalle">
+          <h3 id="vis-detalle-titulo"></h3>
+          <table><thead><tr><th>Fecha y hora</th><th>Sistólica</th><th>Diastólica</th><th>FC mat.</th><th>FC fetal</th></tr></thead>
+          <tbody id="vis-detalle-tbody"></tbody></table>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -341,28 +382,31 @@
         ${esAdmin ? `<td>${p.id_operador_asignado}</td>` : ""}</tr>`).join("");
     }
 
+    let pacienteActual = null, sesionActual = null;
     async function consultarPaciente(ci) {
       const res = await api(`/api/paciente/buscar?ci=${encodeURIComponent(ci)}`);
       const box = document.getElementById("resultado-paciente");
-      if (!res.ok) { box.innerHTML = "<p>No se encontró esa paciente entre tus pacientes.</p>"; clearInterval(timerPac); return; }
-      const { paciente: p, ultima: u, historial } = await res.json();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        box.innerHTML = res.status === 404
+          ? "<p>No se encontró esa paciente entre tus pacientes.</p>"
+          : `<p>Error del servidor (${res.status}): ${err.detail || "revisa la consola de uvicorn"}</p>`;
+        return;
+      }
+      const { paciente: p } = await res.json();
+      pacienteActual = p;
       box.innerHTML = `
         <h3 style="margin-top:15px">${p.nombre} ${p.primer_apellido} ${p.segundo_apellido || ""} — CI ${p.carnet_identidad}</h3>
         <p>${p.semanas_gestacion} semanas (${p.trimestre}° trimestre)</p>
-        <p><b>Datos actuales:</b> ${u
-          ? `FC materna ${u.frecuencia_cardiaca_materna} | FC fetal ${u.frecuencia_cardiaca_fetal} | PA ${u.presion_sistolica}/${u.presion_diastolica} <small>(${new Date(u.fecha_hora).toLocaleString()})</small>`
-          : "sin lecturas"}</p>
-        <table><thead><tr><th>Fecha</th><th>FC mat.</th><th>FC fetal</th><th>PA</th></tr></thead><tbody>
-        ${historial.map(l => `<tr><td>${new Date(l.fecha_hora).toLocaleString()}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td><td>${l.presion_sistolica}/${l.presion_diastolica}</td></tr>`).join("")}
-        </tbody></table>`;
+        <div style="display:flex; gap:10px; margin-top:12px">
+          <button class="btn" style="width:auto;margin:0" onclick="iniciarMonitoreo()">▶ Iniciar monitoreo</button>
+          <button class="btn btn-secondary" style="width:auto;margin:0" onclick="abrirVisualizar()">📋 Visualizar</button>
+        </div>`;
     }
 
     function buscarPaciente() {
       const ci = document.getElementById("buscar-ci").value.trim();
-      if (!ci) return;
-      clearInterval(timerPac);
-      consultarPaciente(ci);
-      timerPac = setInterval(() => consultarPaciente(ci), 3000);
+      if (ci) consultarPaciente(ci);
     }
 
     async function loadDatosAdmin() {
@@ -547,6 +591,87 @@
     function logout() {
       window.location.href = window.location.pathname;
     }
+
+    function mostrarVista(id) {
+      clearInterval(timerPac);
+      document.querySelectorAll("main section").forEach(s => s.classList.add("hidden"));
+      document.getElementById(id).classList.remove("hidden");
+    }
+    function volverBusqueda() { showTab("tab-monitoreo"); }
+    const nombrePac = () => `${pacienteActual.nombre} ${pacienteActual.primer_apellido} ${pacienteActual.segundo_apellido || ""}`;
+
+    // ---- MONITOREO ----
+    async function iniciarMonitoreo() {
+      const res = await api(`/api/sesion/iniciar?id_paciente=${pacienteActual.id_paciente}`, "POST");
+      if (!res.ok) return alert("No se pudo iniciar el monitoreo.");
+      sesionActual = (await res.json()).id_sesion;
+      document.getElementById("mon-titulo").textContent = `Monitoreo: ${nombrePac()}`;
+      mostrarVista("view-monitoreo");
+      actualizarMonitoreo();
+      timerPac = setInterval(actualizarMonitoreo, 2000);
+    }
+
+    async function actualizarMonitoreo() {
+      const res = await api(`/api/sesion/${sesionActual}/en-vivo`);
+      if (!res.ok) return;
+      const { ultima: u, recientes } = await res.json();
+      document.getElementById("mon-sis").textContent = u ? u.presion_sistolica : "—";
+      document.getElementById("mon-dia").textContent = u ? u.presion_diastolica : "—";
+      document.getElementById("mon-fcm").textContent = u ? u.frecuencia_cardiaca_materna : "—";
+      document.getElementById("mon-fcf").textContent = u ? u.frecuencia_cardiaca_fetal : "—";
+      document.getElementById("mon-tbody").innerHTML = recientes.map(l =>
+        `<tr><td>${new Date(l.fecha_hora).toLocaleTimeString()}</td><td>${l.presion_sistolica}</td><td>${l.presion_diastolica}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td></tr>`).join("");
+    }
+
+    async function finalizarMonitoreo() {
+      await api(`/api/sesion/${sesionActual}/finalizar`, "POST");
+      sesionActual = null;
+      volverBusqueda();
+    }
+
+    // ---- VISUALIZAR ----
+    function abrirVisualizar() {
+      document.getElementById("vis-titulo").textContent = `Sesiones de ${nombrePac()}`;
+      document.getElementById("vis-desde").value = "";
+      document.getElementById("vis-hasta").value = "";
+      document.getElementById("vis-detalle").classList.add("hidden");
+      mostrarVista("view-visualizar");
+      cargarSesiones();
+    }
+
+    function limpiarFiltro() {
+      document.getElementById("vis-desde").value = "";
+      document.getElementById("vis-hasta").value = "";
+      cargarSesiones();
+    }
+
+    async function cargarSesiones() {
+      const d = document.getElementById("vis-desde").value, h = document.getElementById("vis-hasta").value;
+      const res = await api(`/api/paciente/${pacienteActual.id_paciente}/sesiones?desde=${d}&hasta=${h}`);
+      if (!res.ok) return;
+      const rows = await res.json();
+      const f = x => x ?? "—";
+      document.getElementById("vis-tbody").innerHTML = rows.length ? rows.map(s =>
+        `<tr><td>${new Date(s.fecha_inicio).toLocaleString()}</td>
+        <td>${s.fecha_fin ? new Date(s.fecha_fin).toLocaleString() : "en curso"}</td>
+        <td>${s.n_lecturas}</td><td>${f(s.presion_sistolica)}</td><td>${f(s.presion_diastolica)}</td>
+        <td>${f(s.fc_materna)}</td><td>${f(s.fc_fetal)}</td>
+        <td><button class="btn" style="width:auto;margin:0;padding:6px 12px" onclick="verSesion(${s.id_sesion})">Ver datos</button></td></tr>`).join("")
+        : `<tr><td colspan="8">No hay sesiones en ese rango.</td></tr>`;
+    }
+
+    async function verSesion(id) {
+      const res = await api(`/api/sesion/${id}/lecturas`);
+      if (!res.ok) return;
+      const lect = await res.json();
+      document.getElementById("vis-detalle-titulo").textContent = `Sesión #${id}: ${lect.length} lecturas`;
+      document.getElementById("vis-detalle-tbody").innerHTML = lect.map(l =>
+        `<tr><td>${new Date(l.fecha_hora).toLocaleString()}</td><td>${l.presion_sistolica}</td><td>${l.presion_diastolica}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td></tr>`).join("");
+      const box = document.getElementById("vis-detalle");
+      box.classList.remove("hidden");
+      box.scrollIntoView({ behavior: "smooth" });
+    }
+
   </script>
 </body>
 </html>

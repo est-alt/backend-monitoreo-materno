@@ -348,6 +348,101 @@ def set_actuador(id_actuador: int, estado: bool, token: str = Query(...)):
     conn.commit(); cur.close(); conn.close()
     return {"status": "ok", "estado": estado}
 
+# ---------- SESIONES DE MONITOREO ----------
+def paciente_permitido(cur, u, id_paciente):
+    q = "SELECT id_paciente, nombre, primer_apellido, segundo_apellido, carnet_identidad FROM paciente WHERE id_paciente = %s"
+    params = [id_paciente]
+    if u['rol'] == 'Operador':
+        q += " AND id_operador_asignado = %s"; params.append(u['id_usuario'])
+    cur.execute(q, params)
+    p = cur.fetchone()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paciente no encontrada.")
+    return p
+
+def sesion_permitida(cur, u, id_sesion):
+    q = """SELECT s.* FROM sesion_monitoreo s JOIN paciente p ON p.id_paciente = s.id_paciente
+           WHERE s.id_sesion = %s"""
+    params = [id_sesion]
+    if u['rol'] == 'Operador':
+        q += " AND p.id_operador_asignado = %s"; params.append(u['id_usuario'])
+    cur.execute(q, params)
+    s = cur.fetchone()
+    if not s:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+    return s
+
+@app.post("/api/sesion/iniciar")
+def iniciar_sesion(id_paciente: int, token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Operador'])
+    paciente_permitido(cur, u, id_paciente)
+    cur.execute("UPDATE sesion_monitoreo SET fecha_fin = NOW() WHERE id_paciente = %s AND fecha_fin IS NULL;", (id_paciente,))
+    cur.execute("INSERT INTO sesion_monitoreo (id_paciente, id_operador) VALUES (%s,%s) RETURNING id_sesion;",
+                (id_paciente, u['id_usuario']))
+    s = cur.fetchone()
+    cur.execute("UPDATE paciente SET fecha_ultima_visita = NOW() WHERE id_paciente = %s;", (id_paciente,))
+    conn.commit(); cur.close(); conn.close()
+    return {"status": "ok", "id_sesion": s['id_sesion']}
+
+@app.post("/api/sesion/{id_sesion}/finalizar")
+def finalizar_sesion(id_sesion: int, token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Operador'])
+    sesion_permitida(cur, u, id_sesion)
+    cur.execute("UPDATE sesion_monitoreo SET fecha_fin = NOW() WHERE id_sesion = %s AND fecha_fin IS NULL;", (id_sesion,))
+    conn.commit(); cur.close(); conn.close()
+    return {"status": "ok"}
+
+@app.get("/api/sesion/{id_sesion}/en-vivo")
+def sesion_en_vivo(id_sesion: int, token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Operador'])
+    sesion_permitida(cur, u, id_sesion)
+    cur.execute("SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s ORDER BY fecha_hora DESC LIMIT 20;", (id_sesion,))
+    lect = cur.fetchall()
+    off = get_offsets(cur)
+    cur.close(); conn.close()
+    lect = [corregir(l, off) for l in lect]
+    return {"ultima": lect[0] if lect else None, "recientes": lect}
+
+@app.get("/api/paciente/{id_paciente}/sesiones")
+def listar_sesiones(id_paciente: int, desde: Optional[str] = None, hasta: Optional[str] = None,
+                    token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Administrador', 'Operador'])
+    paciente_permitido(cur, u, id_paciente)
+    q = """SELECT s.id_sesion, s.fecha_inicio, s.fecha_fin, COUNT(l.id_lectura) AS n_lecturas,
+                  AVG(l.frecuencia_cardiaca_materna) AS fc_materna, AVG(l.frecuencia_cardiaca_fetal) AS fc_fetal,
+                  AVG(l.presion_sistolica) AS presion_sistolica, AVG(l.presion_diastolica) AS presion_diastolica
+           FROM sesion_monitoreo s LEFT JOIN lecturas_monitoreo l ON l.id_sesion = s.id_sesion
+           WHERE s.id_paciente = %s"""
+    params = [id_paciente]
+    if desde:
+        q += " AND s.fecha_inicio >= %s"; params.append(desde)
+    if hasta:
+        q += " AND s.fecha_inicio < (%s::date + 1)"; params.append(hasta)
+    q += " GROUP BY s.id_sesion ORDER BY s.fecha_inicio DESC;"
+    cur.execute(q, params)
+    rows = cur.fetchall()
+    off = get_offsets(cur)
+    cur.close(); conn.close()
+    for r in rows:   # promedios con la calibración aplicada
+        for k in COLS:
+            r[k] = round(float(r[k]) + off.get(k, 0), 1) if r[k] is not None else None
+    return rows
+
+@app.get("/api/sesion/{id_sesion}/lecturas")
+def lecturas_sesion(id_sesion: int, token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Administrador', 'Operador'])
+    sesion_permitida(cur, u, id_sesion)
+    cur.execute("SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s ORDER BY fecha_hora;", (id_sesion,))
+    lect = cur.fetchall()
+    off = get_offsets(cur)
+    cur.close(); conn.close()
+    return [corregir(l, off) for l in lect]
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
