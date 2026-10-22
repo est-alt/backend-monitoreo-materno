@@ -238,8 +238,7 @@
   </div>
 
   <script>
-    const API_URL = "http://127.0.0.1:8000";
-
+    const API_URL = window.location.origin;
     // 1. Obtener Token de la URL
     function getTokenFromURL() {
       const params = new URLSearchParams(window.location.search);
