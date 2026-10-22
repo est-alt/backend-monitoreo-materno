@@ -33,6 +33,7 @@
     .auth-box {
       background: white; padding: 35px; border-radius: 20px; width: 100%; max-width: 420px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 1px solid var(--border);
+      max-height: 90vh; overflow-y: auto;
     }
     .auth-box h2 { font-family: 'Lora', serif; color: var(--primary); margin-bottom: 8px; text-align: center; }
     .auth-box p { font-size: 0.85rem; color: var(--muted); text-align: center; margin-bottom: 20px; }
@@ -47,6 +48,8 @@
       font-weight: 600; border-radius: 10px; cursor: pointer; transition: 0.2s; margin-top: 10px;
     }
     .btn:hover { background: var(--secondary); }
+    .btn-secondary { background: var(--muted); }
+    .btn-secondary:hover { background: var(--text); }
 
     /* Main Dashboard Layout */
     header {
@@ -75,11 +78,17 @@
 </head>
 <body>
 
-  <!-- MODAL DE INICIO DE SESIÓN / PRIMER REGISTRO DE ADMIN -->
+  <!-- MODAL DE INICIO DE SESIÓN / REGISTRO -->
   <div id="auth-overlay" class="auth-overlay">
     <div class="auth-box">
-      <h2 id="auth-title">Iniciar Sesión</h2>
-      <p id="auth-subtitle">Ingresa tus credenciales para acceder al sistema</p>
+      <h2 id="auth-title">Acceso al Sistema</h2>
+      <p id="auth-subtitle">Inicia sesión o crea tu cuenta de administrador</p>
+
+      <!-- BOTONES DE PESTAÑAS PARA CAMBIAR ENTRE LOGIN Y REGISTRO -->
+      <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+        <button type="button" class="btn" style="margin-top:0;" id="tab-btn-login" onclick="switchAuthMode('login')">Iniciar Sesión</button>
+        <button type="button" class="btn btn-secondary" style="margin-top:0;" id="tab-btn-register" onclick="switchAuthMode('register')">Registrarse</button>
+      </div>
 
       <!-- FORMULARIO DE LOGIN -->
       <form id="form-login" onsubmit="handleLogin(event)">
@@ -94,7 +103,7 @@
         <button type="submit" class="btn">Ingresar al Sistema</button>
       </form>
 
-      <!-- FORMULARIO PRIMER ADMIN (Solo si no hay Administrador en PostgreSQL) -->
+      <!-- FORMULARIO DE REGISTRO (PRIMER ADMIN) -->
       <form id="form-first-admin" class="hidden" onsubmit="handleRegisterAdmin(event)">
         <div class="form-group"><label>Nombre</label><input type="text" id="adm-nombre" required></div>
         <div class="form-group"><label>Primer Apellido</label><input type="text" id="adm-p-apellido" required></div>
@@ -126,7 +135,6 @@
 
     <main>
       <!-- TAB 1: MONITOREO -->
-      <!-- OPERADOR: solo sus pacientes -->
       <section id="tab-monitoreo" class="hidden">
         <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Mis Pacientes</h2>
         <div class="card">
@@ -143,7 +151,7 @@
         </div>
       </section>
 
-      <!-- TAB 2: PACIENTES (Operadores y Admins) -->
+      <!-- TAB 2: PACIENTES -->
       <section id="tab-pacientes" class="hidden">
         <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Registrar Nueva Embarazada</h2>
         <div class="card" style="max-width: 500px;">
@@ -164,7 +172,7 @@
         </div>
       </section>
 
-      <!-- TAB 3: ADMIN (Solo Administradores) -->
+      <!-- TAB 3: ADMIN -->
       <section id="tab-admin" class="hidden">
         <h2 style="color: var(--primary); font-family: 'Lora'; margin-bottom: 15px;">Registrar Operador o Técnico</h2>
         <div class="card" style="max-width: 500px;">
@@ -239,7 +247,7 @@
 
   <script>
     const API_URL = window.location.origin;
-    // 1. Obtener Token de la URL
+
     function getTokenFromURL() {
       const params = new URLSearchParams(window.location.search);
       return params.get("token");
@@ -260,6 +268,31 @@
         method, headers: { "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined
       });
+    }
+
+    function switchAuthMode(mode) {
+      const btnLogin = document.getElementById("tab-btn-login");
+      const btnRegister = document.getElementById("tab-btn-register");
+      const formLogin = document.getElementById("form-login");
+      const formRegister = document.getElementById("form-first-admin");
+      const title = document.getElementById("auth-title");
+      const subtitle = document.getElementById("auth-subtitle");
+
+      if (mode === "login") {
+        btnLogin.classList.remove("btn-secondary");
+        btnRegister.classList.add("btn-secondary");
+        formLogin.classList.remove("hidden");
+        formRegister.classList.add("hidden");
+        title.textContent = "Iniciar Sesión";
+        subtitle.textContent = "Ingresa tus credenciales para acceder al sistema";
+      } else {
+        btnRegister.classList.remove("btn-secondary");
+        btnLogin.classList.add("btn-secondary");
+        formRegister.classList.remove("hidden");
+        formLogin.classList.add("hidden");
+        title.textContent = "Registro Inicial";
+        subtitle.textContent = "Crea la cuenta de Administrador principal";
+      }
     }
 
     async function validateSession(token) {
@@ -308,7 +341,6 @@
         ${esAdmin ? `<td>${p.id_operador_asignado}</td>` : ""}</tr>`).join("");
     }
 
-    // ---- OPERADOR ----
     async function consultarPaciente(ci) {
       const res = await api(`/api/paciente/buscar?ci=${encodeURIComponent(ci)}`);
       const box = document.getElementById("resultado-paciente");
@@ -330,10 +362,9 @@
       if (!ci) return;
       clearInterval(timerPac);
       consultarPaciente(ci);
-      timerPac = setInterval(() => consultarPaciente(ci), 3000); // refresca datos actuales
+      timerPac = setInterval(() => consultarPaciente(ci), 3000);
     }
 
-    // ---- ADMIN ----
     async function loadDatosAdmin() {
       loadPacientes("tbody-todas-pacientes");
       const res = await api("/api/estadisticas");
@@ -345,7 +376,6 @@
         <p>Por trimestre: ${por_trimestre.map(t => `${t.trimestre}°: ${t.cantidad}`).join(" | ")}</p>`;
     }
 
-    // ---- SERVICIO TÉCNICO ----
     async function guardarCalibracion() {
       const body = {
         sensor: document.getElementById("cal-sensor").value,
@@ -393,30 +423,23 @@
       if (res.ok) cargarActuadores(); else alert("Error cambiando actuador.");
     }
 
-    // 2. Inicializar Aplicación al Cargar
     window.onload = async () => {
       const token = getTokenFromURL();
-
       if (!token) {
-        // Verificar si existe al menos 1 administrador registrado
-        const res = await fetch(`${API_URL}/api/check-admin`);
-        const data = await res.json();
-
         document.getElementById("auth-overlay").classList.remove("hidden");
-
-        if (!data.has_admin) {
-          document.getElementById("auth-title").textContent = "Registro Inicial";
-          document.getElementById("auth-subtitle").textContent = "No existe un Administrador. Registra la primera cuenta:";
-          document.getElementById("form-login").classList.add("hidden");
-          document.getElementById("form-first-admin").classList.remove("hidden");
+        try {
+          const res = await fetch(`${API_URL}/api/check-admin`);
+          const data = await res.json();
+          if (!data.has_admin) {
+            switchAuthMode('register');
+          }
+        } catch (e) {
+          console.error("Error verificando admin:", e);
         }
       } else {
-        // Token presente en URL -> Validar contra PostgreSQL
         validateSession(token);
       }
     };
-
-    
 
     async function handleLogin(e) {
       e.preventDefault();
@@ -431,7 +454,6 @@
 
       if (res.ok) {
         const data = await res.json();
-        // Redirigir agregando el TOKEN a la URL
         window.location.href = `${window.location.pathname}?token=${data.token}`;
       } else {
         alert("Usuario o contraseña incorrectos");
