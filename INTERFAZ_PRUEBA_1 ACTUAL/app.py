@@ -336,6 +336,11 @@ def listar_actuadores(token: str = Query(...)):
     cur.execute("SELECT id_actuador, nombre_sensor_actuador, estado FROM control_actuadores ORDER BY id_actuador;")
     data = cur.fetchall()
     cur.close(); conn.close()
+    midiendo = ESTADO_ESP32["pedir_presion"] or ESTADO_ESP32["estado_presion"] == 1
+    for a in data:
+        if a['nombre_sensor_actuador'] == 'Bomba de aire':
+            a['estado'] = bool(midiendo)
+            a['solo_lectura'] = True
     return data
 
 @app.post("/api/actuadores/{id_actuador}")
@@ -413,7 +418,18 @@ def sesion_en_vivo(id_sesion: int, token: str = Query(...)):
     conn = get_db_connection(); cur = conn.cursor()
     u = auth(cur, token, ['Operador'])
     sesion_permitida(cur, u, id_sesion)
-    cur.execute("SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s ORDER BY fecha_hora DESC LIMIT 20;", (id_sesion,))
+    cur.execute("""
+        SELECT l.id_lectura, l.fecha_hora, l.frecuencia_cardiaca_materna, l.frecuencia_cardiaca_fetal,
+               COALESCE(l.presion_sistolica, p.presion_sistolica)   AS presion_sistolica,
+               COALESCE(l.presion_diastolica, p.presion_diastolica) AS presion_diastolica
+        FROM lecturas_monitoreo l
+        LEFT JOIN LATERAL (
+            SELECT presion_sistolica, presion_diastolica FROM lecturas_monitoreo
+            WHERE id_sesion = l.id_sesion AND presion_sistolica IS NOT NULL AND fecha_hora <= l.fecha_hora
+            ORDER BY fecha_hora DESC LIMIT 1
+        ) p ON TRUE
+        WHERE l.id_sesion = %s
+        ORDER BY l.fecha_hora DESC LIMIT 20;""", (id_sesion,))
     lect = cur.fetchall()
     cur.execute("""SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s AND presion_sistolica IS NOT NULL
                    ORDER BY fecha_hora DESC LIMIT 1;""", (id_sesion,))
@@ -517,22 +533,26 @@ def recibir_datos_esp32(data: DatosESP32, x_api_key: Optional[str] = Header(None
     dia = v(data.presion_diastolica) if ep == 2 else None
     valores = (fcm, fcf, sis, dia)
     
-    if any(v is not None for v in valores):
+    guardado = True
+    conn = cur = None
+    try:
         conn = get_db_connection(); cur = conn.cursor()
-        try:
-            cur.execute("""INSERT INTO lecturas_monitoreo
-                (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal,
-                 presion_sistolica, presion_diastolica) VALUES (%s,%s,%s,%s,%s,%s);""",
-                (SESION_ACTIVA["id_sesion"], SESION_ACTIVA["id_paciente"], *valores))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=400, detail=f"Error guardando datos del ESP32: {str(e)}")
-        finally:
-            cur.close(); conn.close()
+        cur.execute("""INSERT INTO lecturas_monitoreo
+            (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal,
+             presion_sistolica, presion_diastolica) VALUES (%s,%s,%s,%s,%s,%s);""",
+            (SESION_ACTIVA["id_sesion"], SESION_ACTIVA["id_paciente"], *valores))
+        conn.commit()
+    except Exception as e:
+        guardado = False
+        print(f"ERROR guardando lectura del ESP32: {e}")   # se ve en los Logs de Render
+        if conn: conn.rollback()
+    finally:
+        if cur: cur.close()
+        if conn: conn.close()
 
-    return {"status": "ok", "sesion_activa": True, "medir_presion": ESTADO_ESP32["pedir_presion"]}
-
+    return {"status": "ok", "sesion_activa": True, "guardado": guardado,
+            "medir_presion": ESTADO_ESP32["pedir_presion"]}
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

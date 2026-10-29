@@ -371,7 +371,7 @@
       if (tabId === "tab-datos") loadDatosAdmin();
       if (tabId === "tab-tecnico") {
         cargarCalibracion(); cargarActuadores(); cargarPrueba();
-        timerTec = setInterval(cargarPrueba, 2000);
+        timerTec = setInterval(() => { cargarPrueba(); cargarActuadores(); }, 2000);
       }
     }
 
@@ -459,7 +459,10 @@
       const res = await api("/api/actuadores");
       if (!res.ok) return;
       const acts = await res.json();
-      document.getElementById("actuadores-box").innerHTML = acts.map(a => `
+      document.getElementById("actuadores-box").innerHTML = acts.map(a => a.solo_lectura ? `
+        <div style="margin-bottom:12px">
+          <b>${a.nombre_sensor_actuador}</b> — ${a.estado ? "🟢 ENCENDIDA (medición de presión en curso)" : "⚪ APAGADA"}
+        </div>` : `
         <div style="margin-bottom:12px">
           <b>${a.nombre_sensor_actuador}</b> — ${a.estado ? "🟢 ENCENDIDO" : "⚪ APAGADO"}<br>
           <button class="btn" style="width:auto;display:inline-block" onclick="setActuador(${a.id_actuador}, true)">Encender</button>
