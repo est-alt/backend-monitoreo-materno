@@ -3,7 +3,8 @@ import os
 import secrets
 import hashlib
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+import time
+from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -82,7 +83,8 @@ def corregir(lectura, offsets):
         return None
     l = dict(lectura)
     for s, col in COLS.items():
-        l[col] = round(l[col] + offsets.get(s, 0))
+        if l.get(col) is not None:
+            l[col] = round(l[col] + offsets.get(s, 0))
     return l
 
 class Calibracion(BaseModel):
@@ -348,6 +350,12 @@ def set_actuador(id_actuador: int, estado: bool, token: str = Query(...)):
     conn.commit(); cur.close(); conn.close()
     return {"status": "ok", "estado": estado}
 
+ESP32_KEY = os.getenv("ESP32_KEY")
+ESTADO_ESP32 = {"ultimo_contacto": 0.0, "pedir_presion": False, "estado_presion": 0}  # 0 reposo,1 midiendo,2 ok,3 error
+SESION_ACTIVA = {}
+
+def esp32_conectado():
+    return (time.time() - ESTADO_ESP32["ultimo_contacto"]) < 25
 # ---------- SESIONES DE MONITOREO ----------
 def paciente_permitido(cur, u, id_paciente):
     q = "SELECT id_paciente, nombre, primer_apellido, segundo_apellido, carnet_identidad FROM paciente WHERE id_paciente = %s"
@@ -383,6 +391,9 @@ def iniciar_sesion(id_paciente: int, token: str = Query(...)):
     s = cur.fetchone()
     cur.execute("UPDATE paciente SET fecha_ultima_visita = NOW() WHERE id_paciente = %s;", (id_paciente,))
     conn.commit(); cur.close(); conn.close()
+    SESION_ACTIVA.clear()
+    SESION_ACTIVA.update(id_sesion=s['id_sesion'], id_paciente=id_paciente)
+    ESTADO_ESP32.update(pedir_presion=False, estado_presion=0)
     return {"status": "ok", "id_sesion": s['id_sesion']}
 
 @app.post("/api/sesion/{id_sesion}/finalizar")
@@ -392,6 +403,9 @@ def finalizar_sesion(id_sesion: int, token: str = Query(...)):
     sesion_permitida(cur, u, id_sesion)
     cur.execute("UPDATE sesion_monitoreo SET fecha_fin = NOW() WHERE id_sesion = %s AND fecha_fin IS NULL;", (id_sesion,))
     conn.commit(); cur.close(); conn.close()
+    if SESION_ACTIVA.get("id_sesion") == id_sesion:
+        SESION_ACTIVA.clear()
+        ESTADO_ESP32["pedir_presion"] = False
     return {"status": "ok"}
 
 @app.get("/api/sesion/{id_sesion}/en-vivo")
@@ -401,10 +415,16 @@ def sesion_en_vivo(id_sesion: int, token: str = Query(...)):
     sesion_permitida(cur, u, id_sesion)
     cur.execute("SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s ORDER BY fecha_hora DESC LIMIT 20;", (id_sesion,))
     lect = cur.fetchall()
+    cur.execute("""SELECT * FROM lecturas_monitoreo WHERE id_sesion = %s AND presion_sistolica IS NOT NULL
+                   ORDER BY fecha_hora DESC LIMIT 1;""", (id_sesion,))
+    pres = cur.fetchone()
     off = get_offsets(cur)
     cur.close(); conn.close()
     lect = [corregir(l, off) for l in lect]
-    return {"ultima": lect[0] if lect else None, "recientes": lect}
+    return {"ultima": lect[0] if lect else None, "ultima_presion": corregir(pres, off), "recientes": lect,
+            "esp32_conectado": esp32_conectado(),
+            "estado_presion": ESTADO_ESP32["estado_presion"],
+            "pedida": ESTADO_ESP32["pedir_presion"]}
 
 @app.get("/api/paciente/{id_paciente}/sesiones")
 def listar_sesiones(id_paciente: int, desde: Optional[str] = None, hasta: Optional[str] = None,
@@ -444,33 +464,64 @@ def lecturas_sesion(id_sesion: int, token: str = Query(...)):
     return [corregir(l, off) for l in lect]
 
 class DatosESP32(BaseModel):
-    id_sesion: int
-    frecuencia_cardiaca_materna: float
-    frecuencia_cardiaca_fetal: float
-    presion_sistolica: float
-    presion_diastolica: float
+    frecuencia_cardiaca_materna: Optional[float] = None
+    frecuencia_cardiaca_fetal: Optional[float] = None
+    presion_sistolica: Optional[float] = None
+    presion_diastolica: Optional[float] = None
+    estado_presion: int = 0
+
+@app.post("/api/sesion/{id_sesion}/presion/iniciar")
+def iniciar_toma_presion(id_sesion: int, token: str = Query(...)):
+    conn = get_db_connection(); cur = conn.cursor()
+    u = auth(cur, token, ['Operador'])
+    s = sesion_permitida(cur, u, id_sesion)
+    cur.close(); conn.close()
+    if s['fecha_fin'] is not None or SESION_ACTIVA.get("id_sesion") != id_sesion:
+        raise HTTPException(status_code=400, detail="La sesión no está activa.")
+    if not esp32_conectado():
+        raise HTTPException(status_code=503, detail="El ESP32 no está conectado.")
+    if ESTADO_ESP32["pedir_presion"] or ESTADO_ESP32["estado_presion"] == 1:
+        raise HTTPException(status_code=409, detail="Ya hay una toma de presión en curso.")
+    ESTADO_ESP32.update(pedir_presion=True, estado_presion=0)
+    return {"status": "ok"}
 
 @app.post("/api/esp32/datos")
-def recibir_datos_esp32(data: DatosESP32):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        # Guardar automáticamente la lectura enviada por el ESP32 en la base de datos
-        cur.execute("""
-            INSERT INTO lecturas_monitoreo 
-            (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal, presion_sistolica, presion_diastolica)
-            SELECT %s, id_paciente, %s, %s, %s, %s 
-            FROM sesion_monitoreo WHERE id_sesion = %s;
-        """, (data.id_sesion, data.frecuencia_cardiaca_materna, data.frecuencia_cardiaca_fetal, 
-              data.presion_sistolica, data.presion_diastolica, data.id_sesion))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=f"Error guardando datos del ESP32: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-    return {"status": "ok", "message": "Datos de sensores sincronizados correctamente."}
+def recibir_datos_esp32(data: DatosESP32, x_api_key: Optional[str] = Header(None)):
+    if not ESP32_KEY or not x_api_key or not secrets.compare_digest(x_api_key, ESP32_KEY):
+        raise HTTPException(status_code=401, detail="Dispositivo no autorizado.")
+    ESTADO_ESP32["ultimo_contacto"] = time.time()
+
+    if not SESION_ACTIVA:
+        ESTADO_ESP32["pedir_presion"] = False
+        return {"status": "ok", "sesion_activa": False, "medir_presion": False}
+
+    ep = data.estado_presion
+    if ep in (1, 2, 3):
+        ESTADO_ESP32["pedir_presion"] = False
+        ESTADO_ESP32["estado_presion"] = ep
+    elif ESTADO_ESP32["estado_presion"] == 1:
+        ESTADO_ESP32["estado_presion"] = 0      # el ESP32 perdió la medición (reinicio)
+
+    r = lambda v: None if v is None else round(v)
+    sis = r(data.presion_sistolica) if ep == 2 else None
+    dia = r(data.presion_diastolica) if ep == 2 else None
+    valores = (r(data.frecuencia_cardiaca_materna), r(data.frecuencia_cardiaca_fetal), sis, dia)
+
+    if any(v is not None for v in valores):
+        conn = get_db_connection(); cur = conn.cursor()
+        try:
+            cur.execute("""INSERT INTO lecturas_monitoreo
+                (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal,
+                 presion_sistolica, presion_diastolica) VALUES (%s,%s,%s,%s,%s,%s);""",
+                (SESION_ACTIVA["id_sesion"], SESION_ACTIVA["id_paciente"], *valores))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=f"Error guardando datos del ESP32: {str(e)}")
+        finally:
+            cur.close(); conn.close()
+
+    return {"status": "ok", "sesion_activa": True, "medir_presion": ESTADO_ESP32["pedir_presion"]}
 
 if __name__ == "__main__":
     import uvicorn

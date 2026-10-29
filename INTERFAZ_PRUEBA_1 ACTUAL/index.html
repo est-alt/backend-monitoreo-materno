@@ -252,6 +252,11 @@
           <div class="card" style="text-align:center"><p>FC materna (lpm)</p><h1 id="mon-fcm">—</h1></div>
           <div class="card" style="text-align:center"><p>FC fetal (lpm)</p><h1 id="mon-fcf">—</h1></div>
         </div>
+        <div class="card" style="display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+          <button id="btn-presion" class="btn" style="width:auto;margin:0" onclick="iniciarTomaPresion()">🩸 Iniciar toma de presión</button>
+          <span id="mon-estado-presion">—</span>
+          <span id="mon-esp32" style="margin-left:auto; font-size:0.85rem"></span>
+        </div>
         <div class="card">
           <h3>Últimas lecturas</h3>
           <table><thead><tr><th>Hora</th><th>Sistólica</th><th>Diastólica</th><th>FC mat.</th><th>FC fetal</th></tr></thead>
@@ -611,16 +616,36 @@
       timerPac = setInterval(actualizarMonitoreo, 2000);
     }
 
+    const fechaLocal = s => new Date(s + "Z");   // Neon guarda en UTC; sin la Z la hora sale desfasada
+
     async function actualizarMonitoreo() {
       const res = await api(`/api/sesion/${sesionActual}/en-vivo`);
       if (!res.ok) return;
-      const { ultima: u, recientes } = await res.json();
-      document.getElementById("mon-sis").textContent = u ? u.presion_sistolica : "—";
-      document.getElementById("mon-dia").textContent = u ? u.presion_diastolica : "—";
-      document.getElementById("mon-fcm").textContent = u ? u.frecuencia_cardiaca_materna : "—";
-      document.getElementById("mon-fcf").textContent = u ? u.frecuencia_cardiaca_fetal : "—";
-      document.getElementById("mon-tbody").innerHTML = recientes.map(l =>
-        `<tr><td>${new Date(l.fecha_hora).toLocaleTimeString()}</td><td>${l.presion_sistolica}</td><td>${l.presion_diastolica}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td></tr>`).join("");
+      const d = await res.json();
+      const u = d.ultima, p = d.ultima_presion;
+      const f = x => (x === null || x === undefined) ? "—" : x;
+      document.getElementById("mon-sis").textContent = f(p?.presion_sistolica);
+      document.getElementById("mon-dia").textContent = f(p?.presion_diastolica);
+      document.getElementById("mon-fcm").textContent = f(u?.frecuencia_cardiaca_materna);
+      document.getElementById("mon-fcf").textContent = f(u?.frecuencia_cardiaca_fetal);
+      document.getElementById("mon-tbody").innerHTML = d.recientes.map(l =>
+        `<tr><td>${fechaLocal(l.fecha_hora).toLocaleTimeString()}</td><td>${f(l.presion_sistolica)}</td><td>${f(l.presion_diastolica)}</td><td>${f(l.frecuencia_cardiaca_materna)}</td><td>${f(l.frecuencia_cardiaca_fetal)}</td></tr>`).join("");
+
+      const est = {0: "Sin toma de presión en curso", 1: "⏳ Midiendo presión (~70 s). No muevas el brazo.",
+                  2: "✅ Medición completada", 3: "⚠️ Medición fallida: revisa el manguito y repite."};
+      document.getElementById("mon-estado-presion").textContent =
+        d.pedida ? "📨 Orden enviada, esperando al ESP32..." : est[d.estado_presion];
+      document.getElementById("mon-esp32").textContent = d.esp32_conectado ? "🟢 ESP32 conectado" : "🔴 ESP32 sin conexión";
+      document.getElementById("btn-presion").disabled = !d.esp32_conectado || d.pedida || d.estado_presion === 1;
+    }
+
+    async function iniciarTomaPresion() {
+      const res = await api(`/api/sesion/${sesionActual}/presion/iniciar`, "POST");
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        return alert(e.detail || "No se pudo iniciar la toma de presión.");
+      }
+      actualizarMonitoreo();
     }
 
     async function finalizarMonitoreo() {
@@ -652,8 +677,8 @@
       const rows = await res.json();
       const f = x => x ?? "—";
       document.getElementById("vis-tbody").innerHTML = rows.length ? rows.map(s =>
-        `<tr><td>${new Date(s.fecha_inicio).toLocaleString()}</td>
-        <td>${s.fecha_fin ? new Date(s.fecha_fin).toLocaleString() : "en curso"}</td>
+        `<tr><td>${fechaLocal(s.fecha_inicio).toLocaleString()}</td>
+        <td>${s.fecha_fin ? fechaLocal(s.fecha_fin).toLocaleString() : "en curso"}</td>
         <td>${s.n_lecturas}</td><td>${f(s.presion_sistolica)}</td><td>${f(s.presion_diastolica)}</td>
         <td>${f(s.fc_materna)}</td><td>${f(s.fc_fetal)}</td>
         <td><button class="btn" style="width:auto;margin:0;padding:6px 12px" onclick="verSesion(${s.id_sesion})">Ver datos</button></td></tr>`).join("")
@@ -666,7 +691,7 @@
       const lect = await res.json();
       document.getElementById("vis-detalle-titulo").textContent = `Sesión #${id}: ${lect.length} lecturas`;
       document.getElementById("vis-detalle-tbody").innerHTML = lect.map(l =>
-        `<tr><td>${new Date(l.fecha_hora).toLocaleString()}</td><td>${l.presion_sistolica}</td><td>${l.presion_diastolica}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td></tr>`).join("");
+        `<tr><td>${fechaLocal(l.fecha_hora).toLocaleString()}</td><td>${l.presion_sistolica}</td><td>${l.presion_diastolica}</td><td>${l.frecuencia_cardiaca_materna}</td><td>${l.frecuencia_cardiaca_fetal}</td></tr>`).join("");
       const box = document.getElementById("vis-detalle");
       box.classList.remove("hidden");
       box.scrollIntoView({ behavior: "smooth" });
