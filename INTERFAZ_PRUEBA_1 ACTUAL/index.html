@@ -623,13 +623,14 @@
       if (!res.ok) return;
       const d = await res.json();
       const u = d.ultima, p = d.ultima_presion;
-      const f = x => (x === null || x === undefined) ? "—" : x;
+      const f = x => (x === null || x === undefined) ? "—" : x;   // presión: "—" hasta la primera medición
+      const z = x => (x === null || x === undefined) ? 0 : x;     // FC: 0 si no hay señal
       document.getElementById("mon-sis").textContent = f(p?.presion_sistolica);
       document.getElementById("mon-dia").textContent = f(p?.presion_diastolica);
-      document.getElementById("mon-fcm").textContent = f(u?.frecuencia_cardiaca_materna);
-      document.getElementById("mon-fcf").textContent = f(u?.frecuencia_cardiaca_fetal);
+      document.getElementById("mon-fcm").textContent = z(u?.frecuencia_cardiaca_materna);
+      document.getElementById("mon-fcf").textContent = z(u?.frecuencia_cardiaca_fetal);
       document.getElementById("mon-tbody").innerHTML = d.recientes.map(l =>
-        `<tr><td>${fechaLocal(l.fecha_hora).toLocaleTimeString()}</td><td>${f(l.presion_sistolica)}</td><td>${f(l.presion_diastolica)}</td><td>${f(l.frecuencia_cardiaca_materna)}</td><td>${f(l.frecuencia_cardiaca_fetal)}</td></tr>`).join("");
+        `<tr><td>${fechaLocal(l.fecha_hora).toLocaleTimeString()}</td><td>${f(l.presion_sistolica)}</td><td>${f(l.presion_diastolica)}</td><td>${z(l.frecuencia_cardiaca_materna)}</td><td>${z(l.frecuencia_cardiaca_fetal)}</td></tr>`).join("");
 
       const est = {0: "Sin toma de presión en curso", 1: "⏳ Midiendo presión (~70 s). No muevas el brazo.",
                   2: "✅ Medición completada", 3: "⚠️ Medición fallida: revisa el manguito y repite."};

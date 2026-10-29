@@ -421,7 +421,14 @@ def sesion_en_vivo(id_sesion: int, token: str = Query(...)):
     off = get_offsets(cur)
     cur.close(); conn.close()
     lect = [corregir(l, off) for l in lect]
-    return {"ultima": lect[0] if lect else None, "ultima_presion": corregir(pres, off), "recientes": lect,
+
+    vivo = ESTADO_ESP32.get("ultima")
+    ultima = None
+    if vivo and vivo["id_sesion"] == id_sesion and time.time() - vivo["t"] < 15:
+        ultima = corregir({"frecuencia_cardiaca_materna": vivo["fc_m"],
+                           "frecuencia_cardiaca_fetal": vivo["fc_f"],
+                           "presion_sistolica": None, "presion_diastolica": None}, off)
+    return {"ultima": ultima, "ultima_presion": corregir(pres, off), "recientes": lect,
             "esp32_conectado": esp32_conectado(),
             "estado_presion": ESTADO_ESP32["estado_presion"],
             "pedida": ESTADO_ESP32["pedir_presion"]}
@@ -502,11 +509,14 @@ def recibir_datos_esp32(data: DatosESP32, x_api_key: Optional[str] = Header(None
     elif ESTADO_ESP32["estado_presion"] == 1:
         ESTADO_ESP32["estado_presion"] = 0      # el ESP32 perdió la medición (reinicio)
 
-    r = lambda v: None if v is None else round(v)
-    sis = r(data.presion_sistolica) if ep == 2 else None
-    dia = r(data.presion_diastolica) if ep == 2 else None
-    valores = (r(data.frecuencia_cardiaca_materna), r(data.frecuencia_cardiaca_fetal), sis, dia)
-
+    def v(x):   # 0 o null = sin señal
+        return None if (x is None or x <= 0) else round(x)
+    fcm, fcf = v(data.frecuencia_cardiaca_materna), v(data.frecuencia_cardiaca_fetal)
+    ESTADO_ESP32["ultima"] = {"id_sesion": SESION_ACTIVA["id_sesion"], "fc_m": fcm, "fc_f": fcf, "t": time.time()}
+    sis = v(data.presion_sistolica) if ep == 2 else None
+    dia = v(data.presion_diastolica) if ep == 2 else None
+    valores = (fcm, fcf, sis, dia)
+    
     if any(v is not None for v in valores):
         conn = get_db_connection(); cur = conn.cursor()
         try:
