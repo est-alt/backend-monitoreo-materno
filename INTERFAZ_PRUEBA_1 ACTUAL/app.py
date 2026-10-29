@@ -361,6 +361,14 @@ SESION_ACTIVA = {}
 
 def esp32_conectado():
     return (time.time() - ESTADO_ESP32["ultimo_contacto"]) < 25
+def marcar_bomba(encendida: bool):
+    try:
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("""UPDATE control_actuadores SET estado = %s, fecha_ultima_modificacion = NOW()
+                       WHERE nombre_sensor_actuador = 'Bomba de aire';""", (encendida,))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"ERROR actualizando bomba: {e}")
 # ---------- SESIONES DE MONITOREO ----------
 def paciente_permitido(cur, u, id_paciente):
     q = "SELECT id_paciente, nombre, primer_apellido, segundo_apellido, carnet_identidad FROM paciente WHERE id_paciente = %s"
@@ -506,6 +514,7 @@ def iniciar_toma_presion(id_sesion: int, token: str = Query(...)):
     if ESTADO_ESP32["pedir_presion"] or ESTADO_ESP32["estado_presion"] == 1:
         raise HTTPException(status_code=409, detail="Ya hay una toma de presión en curso.")
     ESTADO_ESP32.update(pedir_presion=True, estado_presion=0)
+    marcar_bomba(True)
     return {"status": "ok"}
 
 @app.post("/api/esp32/datos")
@@ -514,45 +523,51 @@ def recibir_datos_esp32(data: DatosESP32, x_api_key: Optional[str] = Header(None
         raise HTTPException(status_code=401, detail="Dispositivo no autorizado.")
     ESTADO_ESP32["ultimo_contacto"] = time.time()
 
-    if not SESION_ACTIVA:
-        ESTADO_ESP32["pedir_presion"] = False
-        return {"status": "ok", "sesion_activa": False, "medir_presion": False}
-
     ep = data.estado_presion
     if ep in (1, 2, 3):
         ESTADO_ESP32["pedir_presion"] = False
         ESTADO_ESP32["estado_presion"] = ep
+        if ep in (2, 3):
+            marcar_bomba(False)
     elif ESTADO_ESP32["estado_presion"] == 1:
         ESTADO_ESP32["estado_presion"] = 0      # el ESP32 perdió la medición (reinicio)
+        marcar_bomba(False)
 
-    def v(x):   # 0 o null = sin señal
+    if not SESION_ACTIVA:
+        if ESTADO_ESP32["pedir_presion"]:
+            ESTADO_ESP32["pedir_presion"] = False
+            marcar_bomba(False)
+        return {"status": "ok", "sesion_activa": False, "medir_presion": False}
+
+    def norm(x):   # 0 o null = sin señal
         return None if (x is None or x <= 0) else round(x)
-    fcm, fcf = v(data.frecuencia_cardiaca_materna), v(data.frecuencia_cardiaca_fetal)
+    fcm, fcf = norm(data.frecuencia_cardiaca_materna), norm(data.frecuencia_cardiaca_fetal)
     ESTADO_ESP32["ultima"] = {"id_sesion": SESION_ACTIVA["id_sesion"], "fc_m": fcm, "fc_f": fcf, "t": time.time()}
-    sis = v(data.presion_sistolica) if ep == 2 else None
-    dia = v(data.presion_diastolica) if ep == 2 else None
+    sis = norm(data.presion_sistolica) if ep == 2 else None
+    dia = norm(data.presion_diastolica) if ep == 2 else None
     valores = (fcm, fcf, sis, dia)
-    
+
     guardado = True
-    conn = cur = None
-    try:
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("""INSERT INTO lecturas_monitoreo
-            (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal,
-             presion_sistolica, presion_diastolica) VALUES (%s,%s,%s,%s,%s,%s);""",
-            (SESION_ACTIVA["id_sesion"], SESION_ACTIVA["id_paciente"], *valores))
-        conn.commit()
-    except Exception as e:
-        guardado = False
-        print(f"ERROR guardando lectura del ESP32: {e}")   # se ve en los Logs de Render
-        if conn: conn.rollback()
-    finally:
-        if cur: cur.close()
-        if conn: conn.close()
+    if any(x is not None for x in valores):      # si los 4 son 0, no se guarda nada
+        conn = cur = None
+        try:
+            conn = get_db_connection(); cur = conn.cursor()
+            cur.execute("""INSERT INTO lecturas_monitoreo
+                (id_sesion, id_paciente, frecuencia_cardiaca_materna, frecuencia_cardiaca_fetal,
+                 presion_sistolica, presion_diastolica) VALUES (%s,%s,%s,%s,%s,%s);""",
+                (SESION_ACTIVA["id_sesion"], SESION_ACTIVA["id_paciente"], *valores))
+            conn.commit()
+        except Exception as e:
+            guardado = False
+            print(f"ERROR guardando lectura del ESP32: {e}")
+            if conn: conn.rollback()
+        finally:
+            if cur: cur.close()
+            if conn: conn.close()
 
     return {"status": "ok", "sesion_activa": True, "guardado": guardado,
             "medir_presion": ESTADO_ESP32["pedir_presion"]}
-    
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
